@@ -6,10 +6,9 @@ from collections import OrderedDict
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-# Professional Credits
 COPYRIGHT_STRING = "@nexxonhackers | Developed by CREATOR SHYAMCHAND"
 
-def fetch_comprehensive_data(rc_number):
+def get_full_challan_page_info(rc_number):
     rc = rc_number.strip().upper()
     url = f"https://vahanx.in/challan-search/{rc}"
 
@@ -23,48 +22,59 @@ def fetch_comprehensive_data(rc_number):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # ১. গাড়ির বেসিক তথ্য স্ক্র্যাপ করা (মালিকের নাম, আরটিও ইত্যাদি)
-        vehicle_meta = OrderedDict()
-        
-        # vahanx সাধারণত h1, h2 বা নির্দিষ্ট p ট্যাগে নাম দেখায়
-        name_tag = soup.find("h2") or soup.find("h1")
-        vehicle_meta["owner_name"] = name_tag.get_text(strip=True) if name_tag else "Not Found"
+        # ১. নির্দিষ্ট লেবেল ধরে তথ্য খোঁজার ফাংশন (Vehicle Info-এর মতো)
+        def get_val(label):
+            try:
+                # span বা p ট্যাগের ভেতর লেবেলটি খুঁজবে
+                target = soup.find(lambda tag: tag.name in ["span", "p", "strong"] and label in tag.text)
+                if target:
+                    # লেবেলের ঠিক পরের টেক্সট বা প্যারেন্ট ডিভের ভেতরের টেক্সট নেবে
+                    parent = target.find_parent("div")
+                    if parent:
+                        p_text = parent.find("p").get_text(strip=True) if parent.find("p") else parent.get_text(strip=True)
+                        return p_text.replace(label, "").strip()
+                return "N/A"
+            except:
+                return "N/A"
 
-        # অন্যান্য তথ্য খুঁজে বের করা (City, Address, Website)
-        for div in soup.find_all("div", class_="col-md-6"):
-            p_tags = div.find_all("p")
-            for p in p_tags:
-                text = p.get_text(strip=True)
-                # লেবেল অনুযায়ী ডাটা ফিল্টার
-                if "Code" in text: vehicle_meta["rto_code"] = text.replace("Code", "").strip()
-                if "City Name" in text: vehicle_meta["city"] = text.replace("City Name", "").strip()
-                if "Address" in text: vehicle_meta["address"] = text.replace("Address", "").strip()
+        # ২. ওনার এবং লোকেশন ডিটেইলস (OrderedDict দিয়ে সাজানো)
+        # যেহেতু সাইটে "VIVEKANAND PANDEY" সরাসরি বড় হেডিংয়ে থাকে, তাই সেটি আলাদাভাবে ধরা হয়েছে
+        main_title = soup.find("h2") or soup.find("h1")
+        owner_name = main_title.get_text(strip=True) if main_title else get_val("Owner Name")
 
-        # ২. চালানের তথ্য স্ক্র্যাপ করা
+        data = OrderedDict()
+        data["Owner Name"] = owner_name
+        data["RTO Code"] = get_val("Code")
+        data["City"] = get_val("City Name")
+        data["Address"] = get_val("Address")
+        data["Phone"] = get_val("Phone")
+        data["Website"] = get_val("Website")
+
+        # ৩. চালানের লিস্ট স্ক্র্যাপ করা
         challan_list = []
-        # সাধারণত টেবিল বা লিস্টে চালান থাকে
         challan_cards = soup.find_all("div", class_="card-body")
         
         for card in challan_cards:
-            c_data = {}
-            for p in card.find_all("p"):
-                line = p.get_text(strip=True)
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    c_data[k.strip().lower().replace(" ", "_")] = v.strip()
-            if c_data and "challan_number" in str(c_data): # নিশ্চিত হওয়া এটি চালানের ডাটা
-                challan_list.append(c_data)
+            c_info = {}
+            lines = card.find_all("p")
+            for line in lines:
+                text = line.get_text(strip=True)
+                if ":" in text:
+                    k, v = text.split(":", 1)
+                    c_info[k.strip()] = v.strip()
+            
+            # শুধুমাত্র আসল চালান ডাটা ফিল্টার করা
+            if "Challan Number" in str(c_info) or "Amount" in str(c_info):
+                challan_list.append(c_info)
 
-        # ৩. ফাইনাল রেসপন্স তৈরি
         return {
             "status": "success",
             "vehicle_number": rc,
-            "owner_details": vehicle_meta,
-            "challan_summary": {
+            "vehicle_details": data,
+            "challan_info": {
                 "total_challans": len(challan_list),
-                "status": "No Pending Challan" if len(challan_list) == 0 else "Challans Found"
-            },
-            "challans": challan_list
+                "challans": challan_list
+            }
         }
 
     except Exception as e:
@@ -73,7 +83,7 @@ def fetch_comprehensive_data(rc_number):
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
-        "api_name": "Pro Vehicle & Challan Tracker",
+        "message": "🚗 Pro Challan & Vehicle Info API is Live",
         "developer": COPYRIGHT_STRING,
         "usage": "/lookup?rc=UP70AJ2399"
     })
@@ -82,12 +92,12 @@ def home():
 def lookup():
     rc = request.args.get("rc")
     if not rc:
-        return jsonify({"error": "RC number is required"}), 400
+        return jsonify({"error": "Please provide ?rc= parameter"}), 400
 
-    result = fetch_comprehensive_data(rc)
-    result["credits"] = COPYRIGHT_STRING
+    result = get_full_challan_page_info(rc)
+    result["copyright"] = COPYRIGHT_STRING
     
     return jsonify(result)
 
-# Vercel Handler
+# Vercel handler
 app_handler = app
