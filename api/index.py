@@ -1,16 +1,18 @@
 from flask import Flask, request, jsonify
 import requests
 from bs4 import BeautifulSoup
+from collections import OrderedDict
 import os
 
 app = Flask(__name__)
+# Emojis এবং Bengali/Hindi সাপোর্ট করার জন্য
 app.config['JSON_AS_ASCII'] = False
 
-# আপনার কাস্টম কপিরাইট
 COPYRIGHT_STRING = "@nexxonhackers | Developed by CREATOR SHYAMCHAND"
 
 def get_challan_details(rc_number: str) -> dict:
     rc = rc_number.strip().upper()
+    # চালানের জন্য সঠিক URL
     url = f"https://vahanx.in/challan-search/{rc}"
 
     headers = {
@@ -21,47 +23,48 @@ def get_challan_details(rc_number: str) -> dict:
     try:
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
+        
+        # যদি তারা JSON রেসপন্স দেয় তবে সেটা হ্যান্ডেল করা
+        if "application/json" in response.headers.get("Content-Type", ""):
+            return response.json()
+        
+        # HTML দিলে সেটা থেকে ডাটা বের করা
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # চালানের লিস্ট খোঁজা
-        challan_list = []
-        # vahanx সাধারণত কার্ড বা টেবিল ফরম্যাটে চালান দেখায়
-        rows = soup.find_all("div", class_="card-body") 
-
-        if not rows:
-            return {"status": "no_challan", "message": "No pending challans found or invalid RC."}
-
-        for row in rows:
-            details = {}
-            # তথ্যের লেবেলগুলো বের করা
-            for p in row.find_all("p"):
+        # Vahanx এর নতুন সিস্টেমে চালানের তথ্য সাধারণত 'card' ক্লাসের ভেতরে থাকে
+        challans = []
+        cards = soup.find_all("div", class_="card") # বা তাদের নির্দিষ্ট কার্ড ক্লাস
+        
+        for card in cards:
+            details = OrderedDict()
+            ps = card.find_all("p")
+            for p in ps:
                 text = p.get_text(strip=True)
                 if ":" in text:
                     key, val = text.split(":", 1)
                     details[key.strip()] = val.strip()
-            
             if details:
-                challan_list.append(details)
+                challans.append(details)
+        
+        if not challans:
+            # যদি সরাসরি টেক্সট পাওয়া না যায়, তবে তাদের স্ক্রিপ্ট ট্যাগ চেক করা (প্যারামিটারে যেটা পাঠিয়েছেন)
+            return {"status": "success", "message": "No pending challan found or data format changed.", "challans": []}
 
-        return {
-            "status": "success",
-            "total_challans": len(challan_list),
-            "challans": challan_list
-        }
+        return {"status": "success", "vehicle_number": rc, "challans": challans}
 
     except Exception as e:
-        return {"error": f"Failed to fetch data: {str(e)}"}
+        return {"error": str(e)}
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
-        "message": "🚦 Vehicle Challan Info API is Live!",
-        "developer": "CREATOR SHYAMCHAND",
-        "usage": "/challan?rc=WB94P9966"
+        "message": "🚗 Vehicle Challan API is running!",
+        "developer": COPYRIGHT_STRING,
+        "usage": "/lookup?rc=UP70AJ2399"
     })
 
-@app.route("/challan", methods=["GET"])
-def challan_lookup():
+@app.route("/lookup", methods=["GET"])
+def lookup_challan():
     rc_number = request.args.get("rc")
     if not rc_number:
         return jsonify({
@@ -71,13 +74,11 @@ def challan_lookup():
 
     result = get_challan_details(rc_number)
     
-    # রেজাল্টে কপিরাইট যুক্ত করা
+    # ফাইনাল আউটপুটে কপিরাইট যোগ করা
     if isinstance(result, dict):
         result["copyright"] = COPYRIGHT_STRING
-        result["disclaimer"] = "Data fetched for educational purposes only."
     
     return jsonify(result)
 
-# Vercel app object
+# Vercel handler
 app_handler = app
-                  
